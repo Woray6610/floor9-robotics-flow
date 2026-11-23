@@ -10,9 +10,12 @@ import {
   Route,
   Trash2,
 } from 'lucide-react';
+import { KITTING_RECIPES } from '../sandbox/presets';
 import {
   FlowStep,
   FlowStepAction,
+  KittingFault,
+  KittingOrder,
   SandboxProject,
   SelectionTarget,
   SimulationFrame,
@@ -27,6 +30,7 @@ interface SandboxInspectorProps {
   onSelect: (target: SelectionTarget) => void;
   onUpdateProject: (updater: (prev: SandboxProject) => SandboxProject) => void;
   onDeleteSelected: () => void;
+  onChangeKittingOptions?: (patch: { order?: KittingOrder; fault?: KittingFault }) => void;
 }
 
 const ACTION_LABELS: Record<FlowStepAction, string> = {
@@ -34,6 +38,8 @@ const ACTION_LABELS: Record<FlowStepAction, string> = {
   'pick-station': 'AMR+UR คีบ Object จากสถานีขึ้นรถ',
   'transfer-amr': 'AMR+UR ส่งต่อ Object ให้ AMR อีกคัน',
   'ur-unload': 'UR ตั้งโต๊ะ ยก Object จาก AMR ลงสถานี',
+  'ur-kit': 'UR ตั้งโต๊ะ จัดชิ้นส่วน F → ถาด A (S1–S3)',
+  'qc-inspect': 'กล้องตรวจ QC จำลอง S1–S3',
   wait: 'รอสัญญาณ / รอคิว (Wait)',
 };
 
@@ -45,6 +51,7 @@ export const SandboxInspector: React.FC<SandboxInspectorProps> = ({
   onSelect,
   onUpdateProject,
   onDeleteSelected,
+  onChangeKittingOptions,
 }) => {
   const [tab, setTab] = useState<'inspector' | 'flow' | 'routes'>('flow');
 
@@ -717,6 +724,127 @@ export const SandboxInspector: React.FC<SandboxInspectorProps> = ({
               </div>
             )}
 
+            {/* Kitting Order A/B + Fault Missing S3 Panel (visible when Kitting preset is active) */}
+            {project.kitting?.enabled && (
+              <div className="p-2.5 rounded-lg bg-slate-900 border border-sky-500/40 space-y-2">
+                <div className="flex items-center justify-between">
+                  <span className="font-bold text-sky-300 text-[11px]">
+                    ชุดจัดถาด A/B &amp; ตรวจ QC (จำลอง)
+                  </span>
+                  {sim.kitting && (
+                    <span
+                      className={`px-1.5 py-0.5 rounded text-[10px] font-bold ${
+                        sim.kitting.qcStatus === 'pass'
+                          ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/50'
+                          : sim.kitting.qcStatus === 'hold'
+                          ? 'bg-rose-500/25 text-rose-200 border border-rose-500/60'
+                          : sim.kitting.qcStatus === 'inspecting'
+                          ? 'bg-sky-500/25 text-sky-200 border border-sky-400/50'
+                          : 'bg-slate-800 text-slate-300 border border-slate-700'
+                      }`}
+                    >
+                      {sim.kitting.qcBadgeText}
+                    </span>
+                  )}
+                </div>
+
+                {/* Order A / B selector */}
+                <div className="grid grid-cols-2 gap-1.5">
+                  {(['A', 'B'] as const).map((ord) => {
+                    const active = project.kitting?.order === ord;
+                    return (
+                      <button
+                        key={ord}
+                        type="button"
+                        onClick={() => onChangeKittingOptions?.({ order: ord })}
+                        className={`px-2 py-1.5 rounded-md border text-left transition ${
+                          active
+                            ? 'bg-sky-600/30 border-sky-400 text-white'
+                            : 'bg-slate-950 border-slate-800 text-slate-400 hover:text-slate-200'
+                        }`}
+                      >
+                        <div className="font-bold text-[11px]">ออเดอร์ {ord}</div>
+                        <div className="text-[9.5px] opacity-85">
+                          {ord === 'A' ? 'S1 แหวน · S2 บล็อก · S3 แหวน' : 'S1 บล็อก · S2 แหวน · S3 บล็อก'}
+                        </div>
+                      </button>
+                    );
+                  })}
+                </div>
+
+                {/* Fault test toggle: ปกติ / ขาด S3 */}
+                <div className="grid grid-cols-2 gap-1.5 text-[11px]">
+                  <button
+                    type="button"
+                    onClick={() => onChangeKittingOptions?.({ fault: 'none' })}
+                    className={`py-1 rounded-md border font-semibold transition ${
+                      project.kitting.fault === 'none'
+                        ? 'bg-emerald-600/25 border-emerald-400 text-emerald-200'
+                        : 'bg-slate-950 border-slate-800 text-slate-400 hover:text-slate-200'
+                    }`}
+                  >
+                    ปกติ (ครบ 3 ช่อง)
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => onChangeKittingOptions?.({ fault: 'missingS3' })}
+                    className={`py-1 rounded-md border font-semibold transition ${
+                      project.kitting.fault === 'missingS3'
+                        ? 'bg-rose-600/30 border-rose-400 text-rose-200'
+                        : 'bg-slate-950 border-slate-800 text-slate-400 hover:text-slate-200'
+                    }`}
+                  >
+                    ทดสอบ: ขาด S3
+                  </button>
+                </div>
+
+                {/* Live S1-S3 slot readout */}
+                {sim.kitting && (
+                  <div className="pt-1 border-t border-slate-800 space-y-1">
+                    <div className="text-[10px] text-slate-400">
+                      สูตร: {KITTING_RECIPES[sim.kitting.order].label}
+                    </div>
+                    <div className="grid grid-cols-3 gap-1 text-[10px] text-center">
+                      {(['S1', 'S2', 'S3'] as const).map((slotId) => {
+                        const actual = sim.kitting!.actualSlots[slotId];
+                        const isMiss =
+                          sim.kitting!.qcStatus === 'hold' &&
+                          sim.kitting!.missingSlots.includes(slotId);
+                        return (
+                          <div
+                            key={slotId}
+                            className={`px-1.5 py-1 rounded border ${
+                              isMiss
+                                ? 'bg-rose-950/60 border-rose-500 text-rose-200'
+                                : actual
+                                ? 'bg-slate-950 border-slate-700 text-slate-100'
+                                : 'bg-slate-950/60 border-slate-800 text-slate-500'
+                            }`}
+                          >
+                            <div className="font-mono text-[9px] text-slate-400">{slotId}</div>
+                            <div className="font-bold">
+                              {actual === 'ring' ? '◯ แหวน' : actual === 'block' ? '▢ บล็อก' : 'ว่าง'}
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                    {sim.kitting.qcReason && (
+                      <div
+                        className={`text-[10px] px-2 py-1 rounded ${
+                          sim.kitting.qcStatus === 'hold'
+                            ? 'bg-rose-950/60 text-rose-200 border border-rose-800'
+                            : 'bg-emerald-950/50 text-emerald-200 border border-emerald-800/70'
+                        }`}
+                      >
+                        {sim.kitting.qcReason}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
+
             <div className="flex items-center justify-between">
               <span className="text-[11px] font-semibold text-slate-300">
                 ลำดับ Step งาน (โหมด A)
@@ -807,19 +935,105 @@ export const SandboxInspector: React.FC<SandboxInspectorProps> = ({
 
                   {/* Contextual selectors per action type */}
                   <div className="grid grid-cols-2 gap-1.5 text-[10px]">
-                    {step.action !== 'ur-unload' && (
-                      <select
-                        value={step.robotId ?? ''}
-                        onChange={(e) => updateStep(step.id, { robotId: e.target.value })}
-                        className="px-1.5 py-1 rounded bg-slate-950 border border-slate-700 text-slate-200"
-                      >
-                        <option value="">เลือก AMR...</option>
-                        {project.robots.map((r) => (
-                          <option key={r.id} value={r.id}>
-                            รถ {r.name}
-                          </option>
-                        ))}
-                      </select>
+                    {step.action !== 'ur-unload' &&
+                      step.action !== 'ur-kit' &&
+                      step.action !== 'qc-inspect' && (
+                        <select
+                          value={step.robotId ?? ''}
+                          onChange={(e) => updateStep(step.id, { robotId: e.target.value })}
+                          className="px-1.5 py-1 rounded bg-slate-950 border border-slate-700 text-slate-200"
+                        >
+                          <option value="">เลือก AMR...</option>
+                          {project.robots.map((r) => (
+                            <option key={r.id} value={r.id}>
+                              รถ {r.name}
+                            </option>
+                          ))}
+                        </select>
+                      )}
+
+                    {step.action === 'ur-kit' && (
+                      <>
+                        <select
+                          value={step.urId ?? ''}
+                          onChange={(e) => updateStep(step.id, { urId: e.target.value })}
+                          className="px-1.5 py-1 rounded bg-slate-950 border border-slate-700 text-slate-200"
+                        >
+                          <option value="">แขน UR...</option>
+                          {project.stationURs.map((u) => (
+                            <option key={u.id} value={u.id}>
+                              {u.name}
+                            </option>
+                          ))}
+                        </select>
+                        <select
+                          value={step.feedStationId ?? ''}
+                          onChange={(e) => updateStep(step.id, { feedStationId: e.target.value })}
+                          className="px-1.5 py-1 rounded bg-slate-950 border border-slate-700 text-slate-200"
+                        >
+                          <option value="">โต๊ะป้อน (F)...</option>
+                          {project.stations.map((s) => (
+                            <option key={s.id} value={s.id}>
+                              สถานี {s.code}
+                            </option>
+                          ))}
+                        </select>
+                        <select
+                          value={step.stationId ?? ''}
+                          onChange={(e) => updateStep(step.id, { stationId: e.target.value })}
+                          className="px-1.5 py-1 rounded bg-slate-950 border border-slate-700 text-slate-200"
+                        >
+                          <option value="">จุดจัดถาด (A)...</option>
+                          {project.stations.map((s) => (
+                            <option key={s.id} value={s.id}>
+                              สถานี {s.code}
+                            </option>
+                          ))}
+                        </select>
+                        <select
+                          value={step.objectId ?? ''}
+                          onChange={(e) => updateStep(step.id, { objectId: e.target.value })}
+                          className="px-1.5 py-1 rounded bg-slate-950 border border-slate-700 text-slate-200"
+                        >
+                          <option value="">ถาดจัดชุด...</option>
+                          {project.objects.map((o) => (
+                            <option key={o.id} value={o.id}>
+                              {o.name}
+                            </option>
+                          ))}
+                        </select>
+                      </>
+                    )}
+
+                    {step.action === 'qc-inspect' && (
+                      <>
+                        <select
+                          value={step.cameraAssetId ?? ''}
+                          onChange={(e) => updateStep(step.id, { cameraAssetId: e.target.value })}
+                          className="px-1.5 py-1 rounded bg-slate-950 border border-slate-700 text-slate-200"
+                        >
+                          <option value="">กล้อง QC...</option>
+                          {project.assets
+                            .filter((a) => a.kind === 'camera')
+                            .map((a) => (
+                              <option key={a.id} value={a.id}>
+                                {a.name}
+                              </option>
+                            ))}
+                        </select>
+                        <select
+                          value={step.objectId ?? ''}
+                          onChange={(e) => updateStep(step.id, { objectId: e.target.value })}
+                          className="px-1.5 py-1 rounded bg-slate-950 border border-slate-700 text-slate-200"
+                        >
+                          <option value="">ถาดที่ตรวจ...</option>
+                          {project.objects.map((o) => (
+                            <option key={o.id} value={o.id}>
+                              {o.name}
+                            </option>
+                          ))}
+                        </select>
+                      </>
                     )}
 
                     {step.action === 'move' && (

@@ -27,6 +27,8 @@ import { ShareCloudModal } from './components/ShareCloudModal';
 import {
   createDefaultPreset,
   createEmptyProject,
+  createUrKittingQcPreset,
+  normalizeImportedProject,
   ROBOT_PALETTE,
   STATION_PALETTE,
 } from './sandbox/presets';
@@ -34,6 +36,8 @@ import { evaluateSandbox, getTotalDuration } from './sandbox/simEngine';
 import { useLiveSync } from './sandbox/useLiveSync';
 import {
   EditorTool,
+  KittingFault,
+  KittingOrder,
   RoutePoint,
   SandboxProject,
   SelectionTarget,
@@ -48,7 +52,7 @@ function loadSavedOrPreset(): SandboxProject {
     if (raw) {
       const parsed = JSON.parse(raw) as SandboxProject;
       if (parsed && parsed.version === '2.0' && Array.isArray(parsed.stations)) {
-        return parsed;
+        return normalizeImportedProject(parsed);
       }
     }
   } catch {
@@ -100,7 +104,7 @@ export function App() {
     project,
     onRemoteProject: useCallback(
       (remote: SandboxProject, byUser: string) => {
-        setProject(remote);
+        setProject(normalizeImportedProject(remote));
         if (byUser !== 'เซิร์ฟเวอร์กลาง' && byUser !== 'Cloud 24/7') {
           showToast(`🔄 อัปเดตผังอัตโนมัติจาก ${byUser}`);
         }
@@ -120,8 +124,11 @@ export function App() {
 
   const totalDuration = useMemo(() => getTotalDuration(project, mode), [project, mode]);
 
-  // Animation RAF loop
+  // Animation RAF loop (halts at end when QC_HOLD missingS3 triggers so user clearly sees the hold at A)
   const lastFrameRef = useRef<number | null>(null);
+  const isQcHoldScenario = Boolean(
+    mode === 'modeA' && project.kitting?.enabled && project.kitting.fault === 'missingS3'
+  );
   useEffect(() => {
     if (!isPlaying) {
       lastFrameRef.current = null;
@@ -131,14 +138,21 @@ export function App() {
     const tick = (now: number) => {
       if (lastFrameRef.current !== null) {
         const dt = Math.min(0.1, (now - lastFrameRef.current) / 1000);
-        setSimTime((prev) => (prev + dt * speed) % totalDuration);
+        setSimTime((prev) => {
+          const next = prev + dt * speed;
+          if (isQcHoldScenario && next >= totalDuration - 0.05) {
+            setIsPlaying(false);
+            return totalDuration - 0.05;
+          }
+          return next % totalDuration;
+        });
       }
       lastFrameRef.current = now;
       rafId = requestAnimationFrame(tick);
     };
     rafId = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(rafId);
-  }, [isPlaying, speed, totalDuration]);
+  }, [isPlaying, speed, totalDuration, isQcHoldScenario]);
 
   const sim = useMemo(
     () => evaluateSandbox(project, mode, simTime),
@@ -365,9 +379,13 @@ export function App() {
         if (!Array.isArray(parsed.stations) || !Array.isArray(parsed.robots)) {
           throw new Error('ไฟล์ไม่ใช่รูปแบบ Flow Sandbox V2');
         }
+        const normalized = normalizeImportedProject(parsed);
         setIsPlaying(false);
         setSimTime(0);
-        setProject(parsed);
+        if (normalized.kitting?.enabled) {
+          setMode('modeA');
+        }
+        setProject(normalized);
         setSelection(null);
         showToast(`โหลดไฟล์ ${file.name} สำเร็จ`);
       } catch (err) {
@@ -376,6 +394,36 @@ export function App() {
     };
     reader.readAsText(file);
   };
+
+  const handleChangeKittingOptions = useCallback(
+    (patch: { order?: KittingOrder; fault?: KittingFault }) => {
+      setIsPlaying(false);
+      setSimTime(0);
+      setMode('modeA');
+      updateProject((p) => {
+        if (!p.kitting) return p;
+        const nextOrder = patch.order ?? p.kitting.order;
+        const nextFault = patch.fault ?? p.kitting.fault;
+        return {
+          ...p,
+          kitting: {
+            ...p.kitting,
+            order: nextOrder,
+            fault: nextFault,
+          },
+          steps: p.steps.map((s) =>
+            s.action === 'ur-kit'
+              ? {
+                  ...s,
+                  title: `1. UR-A จัดถาดออเดอร์ ${nextOrder} ลงช่อง S1–S3 (จากจุด F → A)`,
+                }
+              : s
+          ),
+        };
+      });
+    },
+    [updateProject]
+  );
 
   const toolButtons: { id: EditorTool; label: string; icon: React.ReactNode; group: string }[] = [
     { id: 'select', label: 'เลือก / ลากย้าย', icon: <MousePointer2 className="w-4 h-4" />, group: 'core' },
@@ -481,13 +529,36 @@ export function App() {
             onClick={() => {
               setIsPlaying(false);
               setSimTime(0);
+              setMode('modeA');
               setProject(createDefaultPreset());
               setSelection(null);
               showToast('โหลด Preset 1 (A → B → C / D) แล้ว');
             }}
-            className="px-2.5 py-1 rounded bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 font-medium"
+            className={`px-2.5 py-1 rounded border font-medium transition ${
+              !project.kitting?.enabled && project.stations.length > 0
+                ? 'bg-slate-700 border-sky-500/60 text-white'
+                : 'bg-slate-800 hover:bg-slate-700 border-slate-700 text-slate-200'
+            }`}
           >
             โหลด Preset 1
+          </button>
+          <button
+            onClick={() => {
+              setIsPlaying(false);
+              setSimTime(0);
+              setMode('modeA');
+              setProject(createUrKittingQcPreset());
+              setSelection(null);
+              showToast('โหลด Preset: UR จัดชุด A/B + ตรวจถาด แล้ว (โหมด A)');
+            }}
+            className={`px-2.5 py-1 rounded border font-medium transition ${
+              project.kitting?.enabled
+                ? 'bg-sky-600/80 border-sky-400 text-white shadow'
+                : 'bg-slate-800 hover:bg-slate-700 border-slate-700 text-sky-200'
+            }`}
+            title="โหลดฉาก UR-A จัดถาด A/B + กล้อง RealSense ตรวจ S1–S3"
+          >
+            UR จัดชุด A/B + ตรวจถาด
           </button>
           <button
             onClick={() => {
@@ -778,6 +849,7 @@ export function App() {
           onSelect={setSelection}
           onUpdateProject={updateProject}
           onDeleteSelected={handleDeleteSelected}
+          onChangeKittingOptions={handleChangeKittingOptions}
         />
       </div>
 

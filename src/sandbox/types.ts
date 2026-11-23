@@ -42,7 +42,7 @@ export interface RobotUnit {
 
 export interface StationUR {
   id: string;
-  name: string; // e.g. 'UR-C'
+  name: string; // e.g. 'UR-C', 'UR-A'
   x: number;
   y: number;
   reach: number; // px radius
@@ -65,13 +65,29 @@ export interface IIoTAsset {
   note?: string;
 }
 
+export type KittingPartType = 'ring' | 'block';
+export type KittingOrder = 'A' | 'B';
+export type KittingFault = 'none' | 'missingS3';
+
+export interface KittingConfig {
+  enabled: boolean;
+  order: KittingOrder; // A: ring-block-ring, B: block-ring-block
+  fault: KittingFault; // 'none' | 'missingS3'
+  urId: string;        // e.g. 'ur-a'
+  feedStationId: string; // e.g. 'st-feed-a' (F)
+  trayStationId: string; // e.g. 'st-a' (A)
+  trayObjectId: string;  // e.g. 'obj-1'
+  cameraAssetId?: string; // e.g. 'as-cam-a'
+}
+
 export interface WorkObject {
   id: string;
-  name: string; // e.g. 'ตะกร้า #1'
+  name: string; // e.g. 'ตะกร้า #1' or 'ถาดจัดชุด #1 (S1–S3)'
   color: string;
   initialStationId?: string;
   x: number;
   y: number;
+  isKittingTray?: boolean;
 }
 
 export interface RoutePoint {
@@ -94,6 +110,8 @@ export type FlowStepAction =
   | 'pick-station'  // AMR-UR picks object from station onto AMR deck
   | 'transfer-amr'  // AMR-UR transfers object from itself to another AMR
   | 'ur-unload'     // Station UR picks object from AMR and places at station
+  | 'ur-kit'        // Station UR picks ring/block parts from feed F into tray S1-S3 at A
+  | 'qc-inspect'    // Simulated vision camera verifies S1-S3 against Order A/B recipe
   | 'wait';         // Robot / system pauses (e.g. sensor trigger / queue wait)
 
 export interface FlowStep {
@@ -103,11 +121,13 @@ export interface FlowStep {
   duration: number; // seconds
   robotId?: string; // Acting AMR or AMR-UR
   targetRobotId?: string; // Receiving AMR (for transfer-amr)
-  urId?: string; // Acting Station UR (for ur-unload)
+  urId?: string; // Acting Station UR (for ur-unload / ur-kit)
   routeId?: string; // Route to follow (for move)
   reverseRoute?: boolean;
-  stationId?: string; // Target station (for pick-station / ur-unload)
-  objectId?: string; // Object being moved/carried
+  stationId?: string; // Target station (for pick-station / ur-unload / ur-kit tray station / qc-inspect)
+  feedStationId?: string; // Source feed station F (for ur-kit)
+  objectId?: string; // Object/tray being moved/kitted/inspected
+  cameraAssetId?: string; // Camera inspecting the tray (for qc-inspect)
   note?: string;
 }
 
@@ -122,6 +142,7 @@ export interface SandboxProject {
   objects: WorkObject[];
   routes: RobotRoute[];
   steps: FlowStep[];
+  kitting?: KittingConfig;
 }
 
 // Runtime simulation state for rendering
@@ -145,6 +166,7 @@ export interface SimStationURState {
   armEndY: number;
   status: string;
   holdingObjectId: string | null;
+  holdingPartType?: KittingPartType | null;
 }
 
 export interface SimObjectState {
@@ -156,6 +178,38 @@ export interface SimObjectState {
   angle: number;
   holderType: 'station' | 'amr' | 'ur-mobile' | 'ur-station' | 'free';
   holderLabel: string;
+  isKittingTray?: boolean;
+  traySlots?: {
+    S1: KittingPartType | null;
+    S2: KittingPartType | null;
+    S3: KittingPartType | null;
+  };
+}
+
+export interface SimKittingPart {
+  id: string;
+  type: KittingPartType;
+  location: 'feed' | 'ur' | 'tray';
+  slotId?: 'S1' | 'S2' | 'S3';
+  x: number;
+  y: number;
+}
+
+export interface SimKittingState {
+  enabled: boolean;
+  order: KittingOrder;
+  fault: KittingFault;
+  recipe: { S1: KittingPartType; S2: KittingPartType; S3: KittingPartType };
+  actualSlots: { S1: KittingPartType | null; S2: KittingPartType | null; S3: KittingPartType | null };
+  parts: SimKittingPart[];
+  qcStatus: 'pending' | 'inspecting' | 'pass' | 'hold';
+  qcBadgeText: string;
+  qcReason?: string;
+  showQcFrame: boolean;
+  scanProgress: number;
+  missingSlots: ('S1' | 'S2' | 'S3')[];
+  trayObjectId: string;
+  cameraAssetId?: string;
 }
 
 export interface SimulationFrame {
@@ -167,6 +221,7 @@ export interface SimulationFrame {
   robots: Record<string, SimRobotState>;
   stationURs: Record<string, SimStationURState>;
   objects: Record<string, SimObjectState>;
+  kitting?: SimKittingState;
 }
 
 export type SelectionTarget =

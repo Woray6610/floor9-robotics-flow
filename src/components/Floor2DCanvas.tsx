@@ -223,6 +223,45 @@ export const Floor2DCanvas: React.FC<Floor2DCanvasProps> = ({
     setPan({ x: 35, y: 35 });
   };
 
+  // Helper to draw distinguishable Ring (hollow circle) vs Block (chamfered square) 2D icons
+  const renderPartGlyph = (type: 'ring' | 'block', cx: number, cy: number, r = 1.65) => {
+    if (type === 'ring') {
+      return (
+        <g pointerEvents="none">
+          <circle cx={cx} cy={cy} r={r} fill="#3b82f6" stroke="#1e3a8a" strokeWidth={0.55} />
+          <circle cx={cx} cy={cy} r={r * 0.44} fill="#ffffff" stroke="#1e3a8a" strokeWidth={0.35} />
+        </g>
+      );
+    }
+    // Chamfered octagon / square block so silhouette reads distinct from ring even in grayscale
+    const s = r * 0.95;
+    const c = s * 0.35;
+    const pts = [
+      `${cx - s + c},${cy - s}`,
+      `${cx + s - c},${cy - s}`,
+      `${cx + s},${cy - s + c}`,
+      `${cx + s},${cy + s - c}`,
+      `${cx + s - c},${cy + s}`,
+      `${cx - s + c},${cy + s}`,
+      `${cx - s},${cy + s - c}`,
+      `${cx - s},${cy - s + c}`,
+    ].join(' ');
+    return (
+      <g pointerEvents="none">
+        <polygon points={pts} fill="#f59e0b" stroke="#78350f" strokeWidth={0.55} />
+        <rect
+          x={cx - s * 0.35}
+          y={cy - s * 0.35}
+          width={s * 0.7}
+          height={s * 0.7}
+          fill="#fef3c7"
+          stroke="#78350f"
+          strokeWidth={0.25}
+        />
+      </g>
+    );
+  };
+
   // Helper to compute 2-link UR elbow for natural visual look (compact architectural scale)
   const renderURArm2D = (
     baseX: number,
@@ -593,7 +632,7 @@ export const Floor2DCanvas: React.FC<Floor2DCanvasProps> = ({
             const rtState = sim.stationURs[ur.id];
             const endX = rtState?.armEndX ?? ur.x + 9;
             const endY = rtState?.armEndY ?? ur.y - 5;
-            const isHolding = Boolean(rtState?.holdingObjectId);
+            const isHolding = Boolean(rtState?.holdingObjectId || rtState?.holdingPartType);
 
             return (
               <g
@@ -652,15 +691,16 @@ export const Floor2DCanvas: React.FC<Floor2DCanvasProps> = ({
           {project.robots.map((robot) => {
             const isSel = selection?.type === 'robot' && selection.id === robot.id;
             const rState = sim.robots[robot.id];
-            const rx = isPlaying ? (rState?.x ?? robot.x) : robot.x;
-            const ry = isPlaying ? (rState?.y ?? robot.y) : robot.y;
-            const angle = isPlaying ? (rState?.angle ?? robot.angle) : robot.angle;
+            const useLivePose = isPlaying || sim.time > 0;
+            const rx = useLivePose ? (rState?.x ?? robot.x) : robot.x;
+            const ry = useLivePose ? (rState?.y ?? robot.y) : robot.y;
+            const angle = useLivePose ? (rState?.angle ?? robot.angle) : robot.angle;
             const deg = (angle * 180) / Math.PI;
             const hasUR = robot.kind === 'amr-ur';
-            const armEndX = isPlaying
+            const armEndX = useLivePose
               ? (rState?.armEndX ?? rx + Math.cos(angle) * 8)
               : rx + Math.cos(angle) * 8;
-            const armEndY = isPlaying
+            const armEndY = useLivePose
               ? (rState?.armEndY ?? ry + Math.sin(angle) * 8)
               : ry + Math.sin(angle) * 8;
             const isArmHolding = Boolean(rState?.armHoldingObjectId);
@@ -760,7 +800,7 @@ export const Floor2DCanvas: React.FC<Floor2DCanvasProps> = ({
             );
           })}
 
-          {/* ================= 6. OBJECTS / BASKETS LAYER (Compact Box) ================= */}
+          {/* ================= 6. OBJECTS / KITTING TRAY S1-S3 + PARTS LAYER ================= */}
           {project.objects.map((obj) => {
             const isSel = selection?.type === 'object' && selection.id === obj.id;
             const oState = sim.objects[obj.id];
@@ -769,6 +809,9 @@ export const Floor2DCanvas: React.FC<Floor2DCanvasProps> = ({
             const holderType = oState?.holderType ?? 'free';
             const isHeldByUR = holderType === 'ur-mobile' || holderType === 'ur-station';
             const isOnAMR = holderType === 'amr';
+            const isTray = Boolean(oState?.isKittingTray);
+            const slots = oState?.traySlots;
+            const kitting = sim.kitting?.trayObjectId === obj.id ? sim.kitting : undefined;
 
             return (
               <g
@@ -778,37 +821,156 @@ export const Floor2DCanvas: React.FC<Floor2DCanvasProps> = ({
                 onPointerDown={(e) => startEntityDrag(e, 'object', obj.id)}
               >
                 <title>{`${obj.name} (${oState?.holderLabel ?? ''})`}</title>
-                {/* Highlight ring when carried by UR gripper or AMR */}
-                {(isHeldByUR || isOnAMR || isSel) && (
-                  <rect
-                    x={-5.8}
-                    y={-4.6}
-                    width={11.6}
-                    height={9.2}
-                    rx={1.8}
-                    fill="none"
-                    stroke={isHeldByUR ? '#ef4444' : isOnAMR ? '#22c55e' : '#0f172a'}
-                    strokeWidth={1.2}
-                  />
+
+                {isTray ? (
+                  <>
+                    {/* Kitting Tray S1-S3 visual (carries placed rings & blocks cleanly!) */}
+                    {(isHeldByUR || isOnAMR || isSel) && (
+                      <rect
+                        x={-8.8}
+                        y={-5.4}
+                        width={17.6}
+                        height={10.8}
+                        rx={2}
+                        fill="none"
+                        stroke={isHeldByUR ? '#ef4444' : isOnAMR ? '#22c55e' : '#0f172a'}
+                        strokeWidth={1.1}
+                      />
+                    )}
+                    {/* Tray outer frame */}
+                    <rect
+                      x={-7.2}
+                      y={-3.9}
+                      width={14.4}
+                      height={7.8}
+                      rx={1.4}
+                      fill="#ecfdf5"
+                      stroke="#059669"
+                      strokeWidth={1.1}
+                    />
+                    {/* 3 Sub-pockets S1, S2, S3 */}
+                    {(['S1', 'S2', 'S3'] as const).map((slotId, idx) => {
+                      const sx = (idx - 1) * 4.2;
+                      const partType = slots?.[slotId] ?? null;
+                      const isMissingHighlight =
+                        kitting?.qcStatus === 'hold' && kitting.missingSlots.includes(slotId);
+                      return (
+                        <g key={slotId}>
+                          <rect
+                            x={sx - 1.85}
+                            y={-2.2}
+                            width={3.7}
+                            height={4.4}
+                            rx={0.6}
+                            fill={isMissingHighlight ? '#fee2e2' : '#0f172a'}
+                            fillOpacity={isMissingHighlight ? 0.95 : 0.14}
+                            stroke={isMissingHighlight ? '#dc2626' : '#64748b'}
+                            strokeWidth={isMissingHighlight ? 0.8 : 0.45}
+                          />
+                          {partType && renderPartGlyph(partType, sx, 0, 1.45)}
+                        </g>
+                      );
+                    })}
+
+                    {/* Simulated QC Inspection Frame & Result Badge around Tray when parked at A */}
+                    {kitting?.showQcFrame && (
+                      <g pointerEvents="none">
+                        <rect
+                          x={-9.5}
+                          y={-6.2}
+                          width={19}
+                          height={12.4}
+                          rx={2.2}
+                          fill="none"
+                          stroke={
+                            kitting.qcStatus === 'pass'
+                              ? '#16a34a'
+                              : kitting.qcStatus === 'hold'
+                              ? '#dc2626'
+                              : '#0284c7'
+                          }
+                          strokeWidth={1.3}
+                          strokeDasharray={kitting.qcStatus === 'inspecting' ? '2.5 1.5' : undefined}
+                        />
+                        {kitting.qcStatus === 'inspecting' && (
+                          <line
+                            x1={-8 + kitting.scanProgress * 16}
+                            y1={-5.8}
+                            x2={-8 + kitting.scanProgress * 16}
+                            y2={5.8}
+                            stroke="#38bdf8"
+                            strokeWidth={1.1}
+                          />
+                        )}
+                        {/* Compact QC Result Pill above tray */}
+                        <g transform="translate(0, -10.2)">
+                          <rect
+                            x={kitting.qcStatus === 'hold' ? -22 : -18}
+                            y={-4.2}
+                            width={kitting.qcStatus === 'hold' ? 44 : 36}
+                            height={7.4}
+                            rx={3.5}
+                            fill={
+                              kitting.qcStatus === 'pass'
+                                ? '#16a34a'
+                                : kitting.qcStatus === 'hold'
+                                ? '#dc2626'
+                                : '#0284c7'
+                            }
+                            stroke="#ffffff"
+                            strokeWidth={0.7}
+                          />
+                          <text
+                            y={1.2}
+                            textAnchor="middle"
+                            fontSize={4.6}
+                            fontWeight="800"
+                            fill="#ffffff"
+                          >
+                            {kitting.qcStatus === 'pass'
+                              ? 'QC ผ่าน'
+                              : kitting.qcStatus === 'hold'
+                              ? `QC ค้าง • ขาด ${kitting.missingSlots.join(',')}`
+                              : 'กำลังตรวจ...'}
+                          </text>
+                        </g>
+                      </g>
+                    )}
+                  </>
+                ) : (
+                  <>
+                    {/* Standard Basket / Object Box */}
+                    {(isHeldByUR || isOnAMR || isSel) && (
+                      <rect
+                        x={-5.8}
+                        y={-4.6}
+                        width={11.6}
+                        height={9.2}
+                        rx={1.8}
+                        fill="none"
+                        stroke={isHeldByUR ? '#ef4444' : isOnAMR ? '#22c55e' : '#0f172a'}
+                        strokeWidth={1.2}
+                      />
+                    )}
+                    <rect
+                      x={-4.2}
+                      y={-3.3}
+                      width={8.4}
+                      height={6.6}
+                      rx={1.2}
+                      fill={obj.color}
+                      stroke="#78350f"
+                      strokeWidth={1}
+                    />
+                    <line x1={-4.2} y1={0} x2={4.2} y2={0} stroke="#92400e" strokeWidth={0.6} />
+                    <line x1={0} y1={-3.3} x2={0} y2={3.3} stroke="#92400e" strokeWidth={0.6} />
+                  </>
                 )}
-                {/* Compact Basket / Object Box */}
-                <rect
-                  x={-4.2}
-                  y={-3.3}
-                  width={8.4}
-                  height={6.6}
-                  rx={1.2}
-                  fill={obj.color}
-                  stroke="#78350f"
-                  strokeWidth={1}
-                />
-                <line x1={-4.2} y1={0} x2={4.2} y2={0} stroke="#92400e" strokeWidth={0.6} />
-                <line x1={0} y1={-3.3} x2={0} y2={3.3} stroke="#92400e" strokeWidth={0.6} />
 
                 {/* Show small label only when selected or actively held by UR */}
-                {(isSel || isHeldByUR) && (
+                {(isSel || isHeldByUR) && !kitting?.showQcFrame && (
                   <text
-                    y={-6.5}
+                    y={-6.8}
                     textAnchor="middle"
                     fontSize={5}
                     fontWeight="700"
@@ -824,6 +986,26 @@ export const Floor2DCanvas: React.FC<Floor2DCanvasProps> = ({
               </g>
             );
           })}
+
+          {/* ================= 7. KITTING PARTS AT FEED STATION (F) & HELD BY UR-A ================= */}
+          {sim.kitting?.enabled &&
+            sim.kitting.parts
+              .filter((p) => p.location === 'feed' || p.location === 'ur')
+              .map((part) => (
+                <g key={part.id} pointerEvents="none">
+                  {part.location === 'ur' && (
+                    <circle
+                      cx={part.x}
+                      cy={part.y}
+                      r={2.8}
+                      fill="none"
+                      stroke="#ef4444"
+                      strokeWidth={0.8}
+                    />
+                  )}
+                  {renderPartGlyph(part.type, part.x, part.y, part.location === 'ur' ? 1.85 : 1.7)}
+                </g>
+              ))}
         </g>
       </svg>
 
