@@ -8,6 +8,7 @@ import {
   Eraser,
   Eye,
   Grid,
+  Layers,
   MapPin,
   MousePointer2,
   Pause,
@@ -15,15 +16,18 @@ import {
   Radio,
   RotateCcw,
   Route,
+  Save,
   Share2,
   Sparkles,
   Upload,
-  Users,
   Wifi,
 } from 'lucide-react';
 import { Floor2DCanvas } from './components/Floor2DCanvas';
+import { NameEntryModal } from './components/NameEntryModal';
 import { SandboxInspector } from './components/SandboxInspector';
 import { ShareCloudModal } from './components/ShareCloudModal';
+import { WorkflowLibraryModal } from './components/WorkflowLibraryModal';
+import { RemoteCursorState, SavedWorkflowRecord } from './sandbox/cloudSync';
 import {
   createDefaultPreset,
   createEmptyProject,
@@ -63,6 +67,7 @@ function loadSavedOrPreset(): SandboxProject {
 
 export function App() {
   const [project, setProject] = useState<SandboxProject>(loadSavedOrPreset);
+  const [activeWorkflowId, setActiveWorkflowId] = useState<string>('floor9-main');
   const [mode, setMode] = useState<SimulationMode>('modeA');
   const [activeTool, setActiveTool] = useState<EditorTool>('select');
   const [selection, setSelection] = useState<SelectionTarget>(null);
@@ -79,6 +84,8 @@ export function App() {
   const [speed, setSpeed] = useState<number>(1);
   const [toast, setToast] = useState<string | null>(null);
   const [showShareModal, setShowShareModal] = useState<boolean>(false);
+  const [showWorkflowModal, setShowWorkflowModal] = useState<boolean>(false);
+  const [showNameModal, setShowNameModal] = useState<boolean>(false);
 
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
@@ -89,28 +96,115 @@ export function App() {
     }, 3000);
   }, []);
 
-  // Live Sync (Auto-switches between Cloud 24/7 Supabase and Local Shared Server)
+  // Apply real-time teammate drag directly to local canvas state (60fps smooth!)
+  const handleRemoteLiveDrag = useCallback((d: NonNullable<RemoteCursorState['dragging']>) => {
+    setProject((p) => {
+      if (d.kind === 'station') {
+        return {
+          ...p,
+          stations: p.stations.map((s) => (s.id === d.id ? { ...s, x: d.x, y: d.y } : s)),
+          routes: p.routes.map((rt) => ({
+            ...rt,
+            points: rt.points.map((pt) => (pt.stationId === d.id ? { ...pt, x: d.x, y: d.y } : pt)),
+          })),
+          objects: p.objects.map((o) => (o.initialStationId === d.id ? { ...o, x: d.x, y: d.y } : o)),
+        };
+      }
+      if (d.kind === 'robot') {
+        return {
+          ...p,
+          robots: p.robots.map((r) => (r.id === d.id ? { ...r, x: d.x, y: d.y } : r)),
+        };
+      }
+      if (d.kind === 'ur') {
+        return {
+          ...p,
+          stationURs: p.stationURs.map((u) => (u.id === d.id ? { ...u, x: d.x, y: d.y } : u)),
+        };
+      }
+      if (d.kind === 'asset') {
+        return {
+          ...p,
+          assets: p.assets.map((a) => (a.id === d.id ? { ...a, x: d.x, y: d.y } : a)),
+        };
+      }
+      if (d.kind === 'object') {
+        return {
+          ...p,
+          objects: p.objects.map((o) =>
+            o.id === d.id ? { ...o, x: d.x, y: d.y, initialStationId: undefined } : o
+          ),
+        };
+      }
+      if (d.kind === 'route-pt' && typeof d.pointIdx === 'number') {
+        return {
+          ...p,
+          routes: p.routes.map((rt) =>
+            rt.id === d.id
+              ? {
+                  ...rt,
+                  points: rt.points.map((pt, idx) =>
+                    idx === d.pointIdx ? { x: d.x, y: d.y, stationId: undefined } : pt
+                  ),
+                }
+              : rt
+          ),
+        };
+      }
+      return p;
+    });
+  }, []);
+
+  const handleSwitchToWorkflow = useCallback((wf: SavedWorkflowRecord) => {
+    setIsPlaying(false);
+    setSimTime(0);
+    setActiveWorkflowId(wf.id);
+    setProject(wf.project);
+    setSelection(null);
+    if (wf.project.kitting?.enabled) {
+      setMode('modeA');
+    }
+  }, []);
+
+  // Live Collaboration & Workflow Library Hook (Supabase Realtime Presence + Broadcast + DB)
   const {
+    clientId,
     backend: syncBackend,
     status: syncStatus,
     onlineCount,
+    collaborators,
+    remoteCursors,
     lastSyncedAt,
     syncError,
     editorName,
+    editorColor,
+    needsNamePrompt,
+    setIdentity,
     setEditorName,
     cloudConfig,
     setCloudConfig,
+    workflows,
+    workflowsLoading,
+    refreshWorkflows,
+    saveWorkflow,
+    deleteWorkflow,
+    openWorkflow,
+    broadcastPointer,
   } = useLiveSync({
     project,
+    activeWorkflowId,
+    selection,
     onRemoteProject: useCallback(
       (remote: SandboxProject, byUser: string) => {
-        setProject(normalizeImportedProject(remote));
+        setProject(remote);
         if (byUser !== 'เซิร์ฟเวอร์กลาง' && byUser !== 'Cloud 24/7') {
-          showToast(`🔄 อัปเดตผังอัตโนมัติจาก ${byUser}`);
+          showToast(`🔄 ${byUser} อัปเดต Workflow นี้`);
         }
       },
       [showToast]
     ),
+    onRemoteLiveDrag: handleRemoteLiveDrag,
+    onSwitchToWorkflow: handleSwitchToWorkflow,
   });
 
   // Auto-save to localStorage (offline fallback)
@@ -525,91 +619,115 @@ export function App() {
 
           <div className="w-px h-5 bg-slate-800 mx-0.5" />
 
+          {/* Workflow Library Selector + Direct Save Button (Replaces Preset buttons!) */}
           <button
             onClick={() => {
-              setIsPlaying(false);
-              setSimTime(0);
-              setMode('modeA');
-              setProject(createDefaultPreset());
-              setSelection(null);
-              showToast('โหลด Preset 1 (A → B → C / D) แล้ว');
+              refreshWorkflows();
+              setShowWorkflowModal(true);
             }}
-            className={`px-2.5 py-1 rounded border font-medium transition ${
-              !project.kitting?.enabled && project.stations.length > 0
-                ? 'bg-slate-700 border-sky-500/60 text-white'
-                : 'bg-slate-800 hover:bg-slate-700 border-slate-700 text-slate-200'
-            }`}
+            className="px-2.5 py-1 rounded bg-slate-800 hover:bg-slate-700 border border-sky-500/60 text-sky-100 font-semibold flex items-center gap-1.5 max-w-[205px]"
+            title="เปิดคลัง Workflow ของทีม เพื่อเปรียบเทียบ สลับ หรือ Save As ใหม่"
           >
-            โหลด Preset 1
+            <Layers className="w-3.5 h-3.5 text-sky-400 shrink-0" />
+            <span className="truncate">{project.name}</span>
+            <span className="px-1 rounded bg-sky-500/25 text-sky-300 text-[10px] font-mono shrink-0">
+              {workflows.length}
+            </span>
           </button>
+
           <button
-            onClick={() => {
-              setIsPlaying(false);
-              setSimTime(0);
-              setMode('modeA');
-              setProject(createUrKittingQcPreset());
-              setSelection(null);
-              showToast('โหลด Preset: UR จัดชุด A/B + ตรวจถาด แล้ว (โหมด A)');
+            onClick={async () => {
+              const saved = await saveWorkflow({
+                id: activeWorkflowId,
+                name: project.name,
+                project,
+                isNew: false,
+              });
+              if (saved) showToast(`💾 บันทึก "${saved.name}" เรียบร้อย`);
             }}
-            className={`px-2.5 py-1 rounded border font-medium transition ${
-              project.kitting?.enabled
-                ? 'bg-sky-600/80 border-sky-400 text-white shadow'
-                : 'bg-slate-800 hover:bg-slate-700 border-slate-700 text-sky-200'
-            }`}
-            title="โหลดฉาก UR-A จัดถาด A/B + กล้อง RealSense ตรวจ S1–S3"
+            className="px-2.5 py-1 rounded bg-emerald-600 hover:bg-emerald-500 border border-emerald-400/60 text-white font-bold flex items-center gap-1 shadow"
+            title="บันทึก Workflow ที่กำลังเปิดอยู่ลง Cloud ทันที"
           >
-            UR จัดชุด A/B + ตรวจถาด
+            <Save className="w-3.5 h-3.5" /> Save
           </button>
+
           <button
             onClick={() => {
               setIsPlaying(false);
               setSimTime(0);
-              setProject(createEmptyProject());
+              setProject((p) => ({ ...createEmptyProject(), name: p.name }));
               setSelection(null);
-              showToast('ล้างผังเป็นหน้ากระดาษเปล่าแล้ว');
+              showToast('ล้างผังเป็นหน้ากระดาษเปล่าแล้ว (กด Save เพื่อบันทึก)');
             }}
-            className="px-2 py-1 rounded bg-slate-900 hover:bg-rose-950/60 border border-slate-700 text-slate-300 hover:text-rose-200 flex items-center gap-1"
-            title="ล้างผังเริ่มใหม่ทั้งหมด"
+            className="p-1.5 rounded bg-slate-900 hover:bg-rose-950/60 border border-slate-700 text-slate-300 hover:text-rose-200"
+            title="ล้างผังเริ่มใหม่"
           >
-            <Eraser className="w-3.5 h-3.5" /> ล้างผัง
+            <Eraser className="w-3.5 h-3.5" />
           </button>
 
           <div className="w-px h-5 bg-slate-800 mx-0.5" />
 
-          {/* Live Shared Server / Cloud 24/7 Presence & Share Button */}
+          {/* Canva-Style Online Collaborators Avatar Stack (Up to 5+ people) */}
+          <div className="flex items-center -space-x-1.5 mr-1">
+            {collaborators.slice(0, 6).map((c) => {
+              const isMe = c.clientId === clientId;
+              const sameWf = c.workflowId === activeWorkflowId;
+              const initials = (c.name || '?').trim().slice(0, 2).toUpperCase();
+              return (
+                <button
+                  key={c.clientId}
+                  onClick={() => {
+                    if (isMe) setShowNameModal(true);
+                    else if (!sameWf) {
+                      openWorkflow(c.workflowId);
+                      showToast(`สลับไปดู Workflow "${c.workflowName}" ของ ${c.name}`);
+                    }
+                  }}
+                  className={`w-7 h-7 rounded-full flex items-center justify-center text-[10px] font-black text-white border-2 shadow-md transition hover:scale-110 hover:z-10 relative ${
+                    sameWf ? 'border-white' : 'border-slate-700 opacity-70'
+                  }`}
+                  style={{ backgroundColor: c.color }}
+                  title={
+                    isMe
+                      ? `${c.name} (คุณ · คลิกเพื่อเปลี่ยนชื่อ/สี)`
+                      : sameWf
+                      ? `${c.name} · กำลังดู Workflow เดียวกับคุณ`
+                      : `${c.name} · กำลังดู "${c.workflowName}" (คลิกเพื่อตามไปดู)`
+                  }
+                >
+                  {initials}
+                  <span
+                    className={`absolute -bottom-0.5 -right-0.5 w-2 h-2 rounded-full border border-slate-900 ${
+                      sameWf ? 'bg-emerald-400' : 'bg-amber-400'
+                    }`}
+                  />
+                </button>
+              );
+            })}
+          </div>
+
+          {/* Share / Cloud 24/7 Button */}
           <button
             onClick={() => setShowShareModal(true)}
-            className={`px-2.5 py-1 rounded border flex items-center gap-1.5 font-semibold transition ${
+            className={`px-2 py-1 rounded border flex items-center gap-1 font-semibold transition ${
               syncStatus === 'live' && syncBackend === 'cloud'
                 ? 'bg-sky-950/80 border-sky-400/70 text-sky-200 hover:bg-sky-900/70'
-                : syncStatus === 'live'
-                ? 'bg-emerald-950/70 border-emerald-500/60 text-emerald-300 hover:bg-emerald-900/70'
                 : syncStatus === 'saving'
                 ? 'bg-amber-950/70 border-amber-500/60 text-amber-300'
-                : 'bg-slate-900 border-slate-700 text-slate-400'
+                : 'bg-slate-900 border-slate-700 text-slate-300 hover:bg-slate-800'
             }`}
-            title="สถานะแชร์สดและตั้งค่า Cloud 24/7"
+            title={`สถานะ: ${syncStatus} (${onlineCount} คนออนไลน์) · คลิกเพื่อแชร์ลิงก์`}
           >
             <span
               className={`w-2 h-2 rounded-full ${
-                syncStatus === 'live' && syncBackend === 'cloud'
-                  ? 'bg-sky-400'
-                  : syncStatus === 'live'
+                syncStatus === 'live'
                   ? 'bg-emerald-400'
                   : syncStatus === 'saving'
                   ? 'bg-amber-400 animate-pulse'
                   : 'bg-slate-500'
               }`}
             />
-            {syncBackend === 'cloud' ? (
-              <span>Cloud 24/7</span>
-            ) : (
-              <>
-                <Users className="w-3.5 h-3.5" />
-                <span>{onlineCount}</span>
-              </>
-            )}
-            <Share2 className="w-3 h-3 ml-0.5 opacity-80" />
+            <Share2 className="w-3.5 h-3.5" />
           </button>
 
           <button
@@ -757,6 +875,8 @@ export function App() {
             showReachCircles={showReachCircles}
             showAssets={showAssets}
             showGrid={showGrid}
+            remoteCursors={remoteCursors}
+            onPointerBroadcast={broadcastPointer}
             onSelect={setSelection}
             onPlaceItem={handlePlaceItem}
             onAddRoutePoint={handleAddRoutePoint}
@@ -820,6 +940,98 @@ export function App() {
             <div className="absolute bottom-4 right-4 px-3 py-1.5 rounded-lg bg-slate-900/95 border border-emerald-400/70 text-emerald-200 text-xs shadow-xl z-30">
               {toast}
             </div>
+          )}
+
+          {/* Name Entry Modal (Prompts on first visit or when clicking own avatar) */}
+          {(needsNamePrompt || showNameModal) && (
+            <NameEntryModal
+              initialName={editorName}
+              initialColor={editorColor}
+              canClose={!needsNamePrompt}
+              onConfirm={(name, color) => {
+                setIdentity(name, color);
+                setShowNameModal(false);
+                showToast(`ยินดีต้อนรับ ${name}! พร้อมออกแบบ Workflow ร่วมกับทีม`);
+              }}
+              onClose={() => setShowNameModal(false)}
+            />
+          )}
+
+          {/* Workflow Library Modal (Save, Save As, Compare, Delete, Templates) */}
+          {showWorkflowModal && (
+            <WorkflowLibraryModal
+              workflows={workflows}
+              activeWorkflowId={activeWorkflowId}
+              currentWorkflowName={project.name}
+              loading={workflowsLoading}
+              collaborators={collaborators}
+              onOpenWorkflow={async (id) => {
+                const opened = await openWorkflow(id);
+                if (opened) showToast(`เปิดดู "${opened.name}" แล้ว`);
+              }}
+              onSaveOverwrite={async (name) => {
+                const updated = { ...project, name };
+                setProject(updated);
+                const saved = await saveWorkflow({
+                  id: activeWorkflowId,
+                  name,
+                  project: updated,
+                  isNew: false,
+                });
+                if (saved) showToast(`💾 บันทึกทับ "${saved.name}" เรียบร้อย`);
+              }}
+              onSaveAsNew={async (name) => {
+                const updated = { ...project, name };
+                const saved = await saveWorkflow({
+                  name,
+                  project: updated,
+                  isNew: true,
+                });
+                if (saved) {
+                  setActiveWorkflowId(saved.id);
+                  setProject(saved.project);
+                  showToast(`✨ สร้าง Workflow ใหม่ "${saved.name}" แล้ว`);
+                }
+              }}
+              onDeleteWorkflow={async (id) => {
+                const ok = await deleteWorkflow(id);
+                if (ok) {
+                  showToast('ลบ Workflow เรียบร้อย');
+                  if (id === activeWorkflowId) {
+                    const remaining = workflows.filter((w) => w.id !== id);
+                    if (remaining.length > 0) {
+                      openWorkflow(remaining[0].id);
+                    }
+                  }
+                }
+              }}
+              onCreateFromTemplate={async (tpl) => {
+                const base =
+                  tpl === 'kitting'
+                    ? createUrKittingQcPreset()
+                    : tpl === 'empty'
+                    ? createEmptyProject()
+                    : createDefaultPreset();
+                const label =
+                  tpl === 'kitting'
+                    ? `UR จัดชุด A/B (${editorName || 'ทีมงาน'})`
+                    : tpl === 'empty'
+                    ? `ผังใหม่ (${editorName || 'ทีมงาน'})`
+                    : `Flow A→B→C (${editorName || 'ทีมงาน'})`;
+                const nextProj = { ...base, name: label };
+                const saved = await saveWorkflow({ name: label, project: nextProj, isNew: true });
+                if (saved) {
+                  setActiveWorkflowId(saved.id);
+                  setProject(saved.project);
+                  setMode('modeA');
+                  setSimTime(0);
+                  setIsPlaying(false);
+                  showToast(`✨ สร้าง Workflow ใหม่ "${saved.name}" จากต้นแบบแล้ว`);
+                }
+              }}
+              onRefresh={refreshWorkflows}
+              onClose={() => setShowWorkflowModal(false)}
+            />
           )}
 
           {/* Live Share & Cloud 24/7 Modal */}

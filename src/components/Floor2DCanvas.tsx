@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { RemoteCursorState } from '../sandbox/cloudSync';
 import { MAP_HEIGHT, MAP_WIDTH } from '../sandbox/presets';
 import {
   EditorTool,
@@ -18,6 +19,13 @@ interface Floor2DCanvasProps {
   showReachCircles: boolean;
   showAssets: boolean;
   showGrid: boolean;
+  remoteCursors?: RemoteCursorState[];
+  onPointerBroadcast?: (
+    x: number,
+    y: number,
+    dragging?: RemoteCursorState['dragging'],
+    force?: boolean
+  ) => void;
   onSelect: (target: SelectionTarget) => void;
   onPlaceItem: (x: number, y: number) => void;
   onAddRoutePoint: (x: number, y: number, stationId?: string) => void;
@@ -46,6 +54,8 @@ export const Floor2DCanvas: React.FC<Floor2DCanvasProps> = ({
   showReachCircles,
   showAssets,
   showGrid,
+  remoteCursors = [],
+  onPointerBroadcast,
   onSelect,
   onPlaceItem,
   onAddRoutePoint,
@@ -170,7 +180,10 @@ export const Floor2DCanvas: React.FC<Floor2DCanvasProps> = ({
     const pt = clientToMap(e.clientX, e.clientY);
     setHoverPos(pt);
 
-    if (!drag) return;
+    if (!drag) {
+      onPointerBroadcast?.(pt.x, pt.y, null, false);
+      return;
+    }
 
     if (drag.kind === 'pan') {
       setPan({
@@ -180,15 +193,37 @@ export const Floor2DCanvas: React.FC<Floor2DCanvasProps> = ({
       return;
     }
 
-    if (drag.kind === 'station') onMoveStation(drag.id, pt.x, pt.y);
-    else if (drag.kind === 'robot') onMoveRobot(drag.id, pt.x, pt.y);
-    else if (drag.kind === 'ur') onMoveUR(drag.id, pt.x, pt.y);
-    else if (drag.kind === 'asset') onMoveAsset(drag.id, pt.x, pt.y);
-    else if (drag.kind === 'object') onMoveObject(drag.id, pt.x, pt.y);
-    else if (drag.kind === 'route-pt') onMoveRoutePoint(drag.routeId, drag.pointIdx, pt.x, pt.y);
+    if (drag.kind === 'station') {
+      onMoveStation(drag.id, pt.x, pt.y);
+      onPointerBroadcast?.(pt.x, pt.y, { kind: 'station', id: drag.id, x: pt.x, y: pt.y });
+    } else if (drag.kind === 'robot') {
+      onMoveRobot(drag.id, pt.x, pt.y);
+      onPointerBroadcast?.(pt.x, pt.y, { kind: 'robot', id: drag.id, x: pt.x, y: pt.y });
+    } else if (drag.kind === 'ur') {
+      onMoveUR(drag.id, pt.x, pt.y);
+      onPointerBroadcast?.(pt.x, pt.y, { kind: 'ur', id: drag.id, x: pt.x, y: pt.y });
+    } else if (drag.kind === 'asset') {
+      onMoveAsset(drag.id, pt.x, pt.y);
+      onPointerBroadcast?.(pt.x, pt.y, { kind: 'asset', id: drag.id, x: pt.x, y: pt.y });
+    } else if (drag.kind === 'object') {
+      onMoveObject(drag.id, pt.x, pt.y);
+      onPointerBroadcast?.(pt.x, pt.y, { kind: 'object', id: drag.id, x: pt.x, y: pt.y });
+    } else if (drag.kind === 'route-pt') {
+      onMoveRoutePoint(drag.routeId, drag.pointIdx, pt.x, pt.y);
+      onPointerBroadcast?.(pt.x, pt.y, {
+        kind: 'route-pt',
+        id: drag.routeId,
+        pointIdx: drag.pointIdx,
+        x: pt.x,
+        y: pt.y,
+      });
+    }
   };
 
   const handlePointerUp = () => {
+    if (drag && drag.kind !== 'pan' && hoverPos) {
+      onPointerBroadcast?.(hoverPos.x, hoverPos.y, null, true);
+    }
     setDrag(null);
   };
 
@@ -1006,6 +1041,107 @@ export const Floor2DCanvas: React.FC<Floor2DCanvasProps> = ({
                   {renderPartGlyph(part.type, part.x, part.y, part.location === 'ur' ? 1.85 : 1.7)}
                 </g>
               ))}
+
+          {/* ================= 8. LIVE TEAMMATE SELECTIONS & CURSORS (Canva / Figma Style) ================= */}
+          {remoteCursors.map((rc) => {
+            // Find selected entity coordinates so teammates see a colored selection ring around what this friend clicked!
+            let selPos: { x: number; y: number } | null = null;
+            if (rc.selection) {
+              if (rc.selection.type === 'station') {
+                const s = project.stations.find((x) => x.id === rc.selection!.id);
+                if (s) selPos = { x: s.x, y: s.y };
+              } else if (rc.selection.type === 'robot') {
+                const r = project.robots.find((x) => x.id === rc.selection!.id);
+                if (r) selPos = { x: r.x, y: r.y };
+              } else if (rc.selection.type === 'ur') {
+                const u = project.stationURs.find((x) => x.id === rc.selection!.id);
+                if (u) selPos = { x: u.x, y: u.y };
+              } else if (rc.selection.type === 'asset') {
+                const a = project.assets.find((x) => x.id === rc.selection!.id);
+                if (a) selPos = { x: a.x, y: a.y };
+              } else if (rc.selection.type === 'object') {
+                const o = sim.objects[rc.selection.id] || project.objects.find((x) => x.id === rc.selection!.id);
+                if (o) selPos = { x: o.x, y: o.y };
+              }
+            }
+
+            const hasValidCursor = rc.x >= 0 && rc.y >= 0 && rc.x <= MAP_WIDTH && rc.y <= MAP_HEIGHT;
+            const tagW = Math.max(22, rc.name.length * 3.8 + 8);
+
+            return (
+              <g key={rc.clientId} pointerEvents="none">
+                {/* Colored dashed ring + name badge on the object this teammate selected */}
+                {selPos && (
+                  <g transform={`translate(${selPos.x}, ${selPos.y})`}>
+                    <circle
+                      r={13}
+                      fill="none"
+                      stroke={rc.color}
+                      strokeWidth={1.6}
+                      strokeDasharray="3 2"
+                    />
+                    <rect
+                      x={-tagW / 2}
+                      y={13.5}
+                      width={tagW}
+                      height={7.5}
+                      rx={3.5}
+                      fill={rc.color}
+                      stroke="#ffffff"
+                      strokeWidth={0.7}
+                    />
+                    <text
+                      y={19}
+                      textAnchor="middle"
+                      fontSize={4.8}
+                      fontWeight="800"
+                      fill="#ffffff"
+                    >
+                      {rc.name}
+                    </text>
+                  </g>
+                )}
+
+                {/* Real-time pointer arrow + Canva/Figma name tag */}
+                {hasValidCursor && (
+                  <g
+                    transform={`translate(${rc.x}, ${rc.y})`}
+                    style={{ transition: 'transform 60ms linear' }}
+                  >
+                    <path
+                      d="M 0 0 L 0 9.5 L 2.8 7.2 L 5.2 11 L 6.8 10 L 4.4 6.2 L 7.8 6.0 Z"
+                      fill={rc.color}
+                      stroke="#ffffff"
+                      strokeWidth={0.9}
+                      strokeLinejoin="round"
+                    />
+                    <g transform="translate(7.5, 6.5)">
+                      <rect
+                        x={0}
+                        y={0}
+                        width={tagW}
+                        height={8}
+                        rx={3.5}
+                        fill={rc.color}
+                        stroke="#ffffff"
+                        strokeWidth={0.7}
+                      />
+                      <text
+                        x={tagW / 2}
+                        y={5.6}
+                        textAnchor="middle"
+                        fontSize={5}
+                        fontWeight="800"
+                        fill="#ffffff"
+                      >
+                        {rc.name}
+                      </text>
+                    </g>
+                  </g>
+                )}
+              </g>
+            );
+          })}
         </g>
       </svg>
 
