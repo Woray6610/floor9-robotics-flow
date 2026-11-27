@@ -29,6 +29,7 @@ import { ShareCloudModal } from './components/ShareCloudModal';
 import { WorkflowLibraryModal } from './components/WorkflowLibraryModal';
 import { RemoteCursorState, SavedWorkflowRecord } from './sandbox/cloudSync';
 import {
+  createConvoyDemoPreset,
   createDefaultPreset,
   createEmptyProject,
   createUrKittingQcPreset,
@@ -1009,12 +1010,16 @@ export function App() {
                 const base =
                   tpl === 'kitting'
                     ? createUrKittingQcPreset()
+                    : tpl === 'convoy'
+                    ? createConvoyDemoPreset()
                     : tpl === 'empty'
                     ? createEmptyProject()
                     : createDefaultPreset();
                 const label =
                   tpl === 'kitting'
                     ? `UR จัดชุด A/B (${editorName || 'ทีมงาน'})`
+                    : tpl === 'convoy'
+                    ? `ขบวน AMR แถวตอนเรียง 1 (${editorName || 'ทีมงาน'})`
                     : tpl === 'empty'
                     ? `ผังใหม่ (${editorName || 'ทีมงาน'})`
                     : `Flow A→B→C (${editorName || 'ทีมงาน'})`;

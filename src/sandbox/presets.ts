@@ -696,6 +696,96 @@ export function normalizeImportedProject(raw: SandboxProject): SandboxProject {
 }
 
 /**
+ * Starter Template #3 — AMR เดินขบวนแถวตอนเรียง 1 (Single-Lane Convoy Demo)
+ * Demonstrates M1 + M2 (and optional M3) travelling together in single-file platoon from A -> B -> C and returning cleanly.
+ */
+export function createConvoyDemoPreset(): SandboxProject {
+  const base = createDefaultPreset();
+  return {
+    ...base,
+    name: 'ขบวน AMR แถวตอนเรียง 1 (M1 → M2)',
+    updatedAt: new Date().toISOString(),
+    routes: [
+      {
+        id: 'rt-convoy-abc',
+        name: 'เส้นทางขบวน: A → โถง B → ทางเดินบน → ห้อง C',
+        robotId: 'amr-m1',
+        color: '#38bdf8',
+        loop: true,
+        points: [
+          { x: 690, y: 318, stationId: 'st-a' },
+          { x: 698, y: 215 },
+          { x: 698, y: 191 },
+          { x: 600, y: 191 },
+          { x: 600, y: 235, stationId: 'st-b' },
+          { x: 600, y: 191 },
+          { x: 784, y: 191 },
+          { x: 784, y: 268, stationId: 'st-c' },
+        ],
+      },
+      {
+        id: 'rt-convoy-bc',
+        name: 'เส้นทางขบวนทางเดินหลัก: B → ทางเดินบน → C',
+        robotId: 'amr-m1',
+        color: '#22c55e',
+        loop: true,
+        points: [
+          { x: 588, y: 235, stationId: 'st-b' },
+          { x: 588, y: 191 },
+          { x: 784, y: 191 },
+          { x: 784, y: 268, stationId: 'st-c' },
+        ],
+      },
+    ],
+    steps: [
+      {
+        id: 'step-convoy-pick',
+        title: '1. M1 รับตะกร้า #1 ที่จุด A เตรียมตั้งขบวน',
+        action: 'pick-station',
+        duration: 3.5,
+        robotId: 'amr-m1',
+        stationId: 'st-a',
+        objectId: 'obj-1',
+        note: 'M1 หยิบตะกร้าขึ้นหลังรถก่อนเริ่มเดินขบวนร่วมกับ M2',
+      },
+      {
+        id: 'step-convoy-go',
+        title: '2. ขบวน M1 + M2 เดินแถวตอนเรียง 1 (B → ทางเดินบน → C)',
+        action: 'convoy-move',
+        duration: 7.5,
+        convoyRobotIds: ['amr-m1', 'amr-m2'],
+        convoySpacing: 24,
+        routeId: 'rt-convoy-bc',
+        reverseRoute: false,
+        note: 'M1 คันนำ (#1) และ M2 คันตาม (#2) วิ่งตามแนวเส้นทางเดียวกันโดยเว้นระยะห่างปลอดภัย',
+      },
+      {
+        id: 'step-convoy-unload',
+        title: '3. UR-C ยกตะกร้าจากคันนำ M1 ลงช่องพัก D',
+        action: 'ur-unload',
+        duration: 4,
+        urId: 'ur-c',
+        robotId: 'amr-m1',
+        stationId: 'st-d',
+        objectId: 'obj-1',
+        note: 'M2 จอดต่อท้ายเว้นระยะปลอดภัยระหว่าง UR-C ยกของลงจาก M1',
+      },
+      {
+        id: 'step-convoy-return',
+        title: '4. ขบวน M2 + M1 เดินแถวตอนเรียง 1 กลับ (C → B)',
+        action: 'convoy-move',
+        duration: 7,
+        convoyRobotIds: ['amr-m2', 'amr-m1'],
+        convoySpacing: 24,
+        routeId: 'rt-convoy-bc',
+        reverseRoute: true,
+        note: 'สลับให้ M2 นำขบวนและ M1 ตามหลังวิ่งย้อนเส้นทางกลับพร้อมกัน',
+      },
+    ],
+  };
+}
+
+/**
  * Empty Map Canvas for starting completely from scratch
  */
 export function createEmptyProject(): SandboxProject {

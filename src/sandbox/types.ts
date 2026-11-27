@@ -107,6 +107,7 @@ export interface RobotRoute {
 
 export type FlowStepAction =
   | 'move'          // AMR moves along a route (forward or reverse)
+  | 'convoy-move'   // 2–3 AMRs move in single-lane platoon/convoy along one route with safe spacing
   | 'pick-station'  // AMR-UR picks object from station onto AMR deck
   | 'transfer-amr'  // AMR-UR transfers object from itself to another AMR
   | 'ur-unload'     // Station UR picks object from AMR and places at station
@@ -119,10 +120,12 @@ export interface FlowStep {
   title: string;
   action: FlowStepAction;
   duration: number; // seconds
-  robotId?: string; // Acting AMR or AMR-UR
+  robotId?: string; // Acting AMR or AMR-UR (or Lead AMR in convoy-move)
   targetRobotId?: string; // Receiving AMR (for transfer-amr)
+  convoyRobotIds?: string[]; // Ordered [lead, follower1, follower2?] for convoy-move
+  convoySpacing?: number; // Safe distance in px between consecutive AMRs (default 24)
   urId?: string; // Acting Station UR (for ur-unload / ur-kit)
-  routeId?: string; // Route to follow (for move)
+  routeId?: string; // Route to follow (for move / convoy-move)
   reverseRoute?: boolean;
   stationId?: string; // Target station (for pick-station / ur-unload / ur-kit tray station / qc-inspect)
   feedStationId?: string; // Source feed station F (for ur-kit)
@@ -212,6 +215,14 @@ export interface SimKittingState {
   cameraAssetId?: string;
 }
 
+export interface SimConvoyVisual {
+  stepId: string;
+  robotIds: string[];
+  color: string;
+  active: boolean;
+  spacing: number;
+}
+
 export interface SimulationFrame {
   mode: SimulationMode;
   time: number;
@@ -222,6 +233,7 @@ export interface SimulationFrame {
   stationURs: Record<string, SimStationURState>;
   objects: Record<string, SimObjectState>;
   kitting?: SimKittingState;
+  activeConvoy?: SimConvoyVisual;
 }
 
 export type SelectionTarget =

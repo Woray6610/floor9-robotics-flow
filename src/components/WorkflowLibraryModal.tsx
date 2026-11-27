@@ -22,7 +22,7 @@ interface WorkflowLibraryModalProps {
   onSaveOverwrite: (name: string) => void;
   onSaveAsNew: (name: string) => void;
   onDeleteWorkflow: (id: string) => void;
-  onCreateFromTemplate: (template: 'preset1' | 'kitting' | 'empty') => void;
+  onCreateFromTemplate: (template: 'preset1' | 'kitting' | 'convoy' | 'empty') => void;
   onRefresh: () => void;
   onClose: () => void;
 }
@@ -263,6 +263,15 @@ export const WorkflowLibraryModal: React.FC<WorkflowLibraryModalProps> = ({
               className="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 border border-sky-500/50 text-sky-200 font-medium flex items-center gap-1"
             >
               <Sparkles className="w-3 h-3" /> ฐาน UR จัดชุด A/B + ตรวจถาด
+            </button>
+            <button
+              onClick={() => {
+                onCreateFromTemplate('convoy');
+                onClose();
+              }}
+              className="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 border border-emerald-500/50 text-emerald-200 font-medium flex items-center gap-1"
+            >
+              🚂 ฐานขบวน AMR แถวตอนเรียง 1
             </button>
             <button
               onClick={() => {

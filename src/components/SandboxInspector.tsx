@@ -35,6 +35,7 @@ interface SandboxInspectorProps {
 
 const ACTION_LABELS: Record<FlowStepAction, string> = {
   move: 'AMR วิ่งตามเส้นทาง',
+  'convoy-move': 'AMR เดินขบวนแถวตอนเรียง 1 (Convoy)',
   'pick-station': 'AMR+UR คีบ Object จากสถานีขึ้นรถ',
   'transfer-amr': 'AMR+UR ส่งต่อ Object ให้ AMR อีกคัน',
   'ur-unload': 'UR ตั้งโต๊ะ ยก Object จาก AMR ลงสถานี',
@@ -906,9 +907,23 @@ export const SandboxInspector: React.FC<SandboxInspectorProps> = ({
                   <div className="grid grid-cols-3 gap-1.5">
                     <select
                       value={step.action}
-                      onChange={(e) =>
-                        updateStep(step.id, { action: e.target.value as FlowStepAction })
-                      }
+                      onChange={(e) => {
+                        const nextAction = e.target.value as FlowStepAction;
+                        if (nextAction === 'convoy-move') {
+                          const defaultIds = project.robots.slice(0, 2).map((r) => r.id);
+                          updateStep(step.id, {
+                            action: nextAction,
+                            convoyRobotIds:
+                              step.convoyRobotIds && step.convoyRobotIds.length >= 2
+                                ? step.convoyRobotIds
+                                : defaultIds,
+                            convoySpacing: step.convoySpacing ?? 24,
+                            routeId: step.routeId || project.routes[0]?.id,
+                          });
+                        } else {
+                          updateStep(step.id, { action: nextAction });
+                        }
+                      }}
                       className="col-span-2 px-1.5 py-1 rounded bg-slate-950 border border-slate-700 text-[10px] text-slate-200"
                     >
                       {(Object.keys(ACTION_LABELS) as FlowStepAction[]).map((k) => (
@@ -937,7 +952,8 @@ export const SandboxInspector: React.FC<SandboxInspectorProps> = ({
                   <div className="grid grid-cols-2 gap-1.5 text-[10px]">
                     {step.action !== 'ur-unload' &&
                       step.action !== 'ur-kit' &&
-                      step.action !== 'qc-inspect' && (
+                      step.action !== 'qc-inspect' &&
+                      step.action !== 'convoy-move' && (
                         <select
                           value={step.robotId ?? ''}
                           onChange={(e) => updateStep(step.id, { robotId: e.target.value })}
@@ -951,6 +967,80 @@ export const SandboxInspector: React.FC<SandboxInspectorProps> = ({
                           ))}
                         </select>
                       )}
+
+                    {step.action === 'convoy-move' && (() => {
+                      const ids = step.convoyRobotIds ?? [];
+                      const setSlot = (slotIdx: number, val: string) => {
+                        const next = [...ids];
+                        while (next.length <= slotIdx) next.push('');
+                        next[slotIdx] = val;
+                        const cleaned = next.filter((v, i) => Boolean(v) && next.indexOf(v) === i);
+                        updateStep(step.id, { convoyRobotIds: cleaned });
+                      };
+                      return (
+                        <div className="col-span-2 space-y-1.5 bg-slate-950/70 border border-sky-500/35 rounded-md p-2">
+                          <div className="text-[10px] font-bold text-sky-300">
+                            ลำดับขบวนแถวตอนเรียง 1 (คันนำ → คันตาม)
+                          </div>
+                          <div className="grid grid-cols-3 gap-1">
+                            {[0, 1, 2].map((slotIdx) => (
+                              <select
+                                key={slotIdx}
+                                value={ids[slotIdx] ?? ''}
+                                onChange={(e) => setSlot(slotIdx, e.target.value)}
+                                className="px-1 py-1 rounded bg-slate-900 border border-slate-700 text-[10px] text-slate-200"
+                              >
+                                <option value="">
+                                  {slotIdx === 0 ? '#1 คันนำ...' : slotIdx === 1 ? '#2 ตาม...' : '#3 (ไม่บังคับ)'}
+                                </option>
+                                {project.robots.map((r) => (
+                                  <option key={r.id} value={r.id}>
+                                    #{slotIdx + 1} {r.name}
+                                  </option>
+                                ))}
+                              </select>
+                            ))}
+                          </div>
+                          <select
+                            value={step.routeId ?? ''}
+                            onChange={(e) => updateStep(step.id, { routeId: e.target.value })}
+                            className="w-full px-1.5 py-1 rounded bg-slate-900 border border-slate-700 text-[10px] text-slate-200"
+                          >
+                            <option value="">เลือกเส้นทางเดินขบวน...</option>
+                            {project.routes.map((rt) => (
+                              <option key={rt.id} value={rt.id}>
+                                {rt.name}
+                              </option>
+                            ))}
+                          </select>
+                          <div className="flex items-center justify-between gap-2 text-[10px] text-slate-300">
+                            <span className="shrink-0">ระยะเว้นห่าง: {step.convoySpacing ?? 24}px</span>
+                            <input
+                              type="range"
+                              min={16}
+                              max={48}
+                              step={2}
+                              value={step.convoySpacing ?? 24}
+                              onChange={(e) =>
+                                updateStep(step.id, { convoySpacing: Number(e.target.value) })
+                              }
+                              className="flex-1 accent-sky-400"
+                            />
+                          </div>
+                          <label className="flex items-center gap-1.5 text-slate-300 cursor-pointer">
+                            <input
+                              type="checkbox"
+                              checked={Boolean(step.reverseRoute)}
+                              onChange={(e) =>
+                                updateStep(step.id, { reverseRoute: e.target.checked })
+                              }
+                              className="accent-sky-400"
+                            />
+                            <span>เดินขบวนย้อนเส้นทางกลับ (Reverse)</span>
+                          </label>
+                        </div>
+                      );
+                    })()}
 
                     {step.action === 'ur-kit' && (
                       <>

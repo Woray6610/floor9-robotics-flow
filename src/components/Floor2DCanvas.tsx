@@ -723,10 +723,66 @@ export const Floor2DCanvas: React.FC<Floor2DCanvasProps> = ({
           })}
 
           {/* ================= 5. AMRs (สี่เหลี่ยมสีเทาขนาดกะทัดรัด + แถบสี + UR บนหัว) ================= */}
+          {/* Convoy Single-Lane Follow Links (rendered underneath AMRs when a convoy step is active) */}
+          {sim.activeConvoy &&
+            sim.activeConvoy.robotIds.length >= 2 &&
+            (isPlaying || sim.time > 0) && (
+              <g pointerEvents="none">
+                {sim.activeConvoy.robotIds.slice(0, -1).map((leadId, idx) => {
+                  const followId = sim.activeConvoy!.robotIds[idx + 1];
+                  const rLead = sim.robots[leadId];
+                  const rFollow = sim.robots[followId];
+                  if (!rLead || !rFollow) return null;
+                  const midX = (rLead.x + rFollow.x) / 2;
+                  const midY = (rLead.y + rFollow.y) / 2;
+                  return (
+                    <g key={`convoy-link-${leadId}-${followId}`}>
+                      <line
+                        x1={rFollow.x}
+                        y1={rFollow.y}
+                        x2={rLead.x}
+                        y2={rLead.y}
+                        stroke={sim.activeConvoy!.active ? '#38bdf8' : '#94a3b8'}
+                        strokeWidth={2}
+                        strokeDasharray="3 2.5"
+                        markerEnd="url(#routeArrow)"
+                        opacity={sim.activeConvoy!.active ? 0.95 : 0.6}
+                      />
+                      <rect
+                        x={midX - 11}
+                        y={midY - 3.6}
+                        width={22}
+                        height={7.2}
+                        rx={3.5}
+                        fill="#0f172a"
+                        fillOpacity={0.85}
+                        stroke="#38bdf8"
+                        strokeWidth={0.6}
+                      />
+                      <text
+                        x={midX}
+                        y={midY + 1.4}
+                        textAnchor="middle"
+                        fontSize={4.2}
+                        fontWeight="800"
+                        fill="#bae6fd"
+                      >
+                        แถวตอน
+                      </text>
+                    </g>
+                  );
+                })}
+              </g>
+            )}
+
           {project.robots.map((robot) => {
             const isSel = selection?.type === 'robot' && selection.id === robot.id;
             const rState = sim.robots[robot.id];
             const useLivePose = isPlaying || sim.time > 0;
+            const convoyRank =
+              useLivePose && sim.activeConvoy
+                ? sim.activeConvoy.robotIds.indexOf(robot.id)
+                : -1;
             const rx = useLivePose ? (rState?.x ?? robot.x) : robot.x;
             const ry = useLivePose ? (rState?.y ?? robot.y) : robot.y;
             const angle = useLivePose ? (rState?.angle ?? robot.angle) : robot.angle;
@@ -808,17 +864,17 @@ export const Floor2DCanvas: React.FC<Floor2DCanvasProps> = ({
                 {/* If AMR has UR on top, draw compact Mobile UR Arm */}
                 {hasUR && renderURArm2D(rx, ry, armEndX, armEndY, robot.color, isArmHolding)}
 
-                {/* Compact Robot ID Tag */}
+                {/* Compact Robot ID Tag (shows convoy rank #1 / #2 / #3 when running in convoy) */}
                 <g transform={`translate(${rx}, ${ry - 9.5})`} pointerEvents="none">
                   <rect
-                    x={hasUR ? -12.5 : -8.5}
+                    x={convoyRank >= 0 ? -15 : hasUR ? -12.5 : -8.5}
                     y={-4.2}
-                    width={hasUR ? 25 : 17}
+                    width={convoyRank >= 0 ? 30 : hasUR ? 25 : 17}
                     height={7.5}
                     rx={3.5}
                     fill={robot.color}
-                    stroke="#ffffff"
-                    strokeWidth={0.7}
+                    stroke={convoyRank >= 0 ? '#38bdf8' : '#ffffff'}
+                    strokeWidth={convoyRank >= 0 ? 1 : 0.7}
                   />
                   <text
                     y={1.5}
@@ -827,6 +883,7 @@ export const Floor2DCanvas: React.FC<Floor2DCanvasProps> = ({
                     fontWeight="800"
                     fill="#ffffff"
                   >
+                    {convoyRank >= 0 ? `#${convoyRank + 1} ` : ''}
                     {robot.name}
                     {hasUR ? '+UR' : ''}
                   </text>

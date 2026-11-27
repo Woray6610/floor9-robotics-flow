@@ -3,6 +3,7 @@ import {
   KittingPartType,
   RoutePoint,
   SandboxProject,
+  SimConvoyVisual,
   SimKittingPart,
   SimKittingState,
   SimObjectState,
@@ -23,19 +24,30 @@ function smoothstep(t: number): number {
 }
 
 /**
- * Sample a 2D polyline at normalized progress [0..1]
+ * Compute total length of a 2D polyline in map px
  */
-export function samplePolyline2D(
+export function getPolylineLength2D(pts: RoutePoint[]): number {
+  let total = 0;
+  for (let i = 0; i < pts.length - 1; i++) {
+    total += Math.hypot(pts[i + 1].x - pts[i].x, pts[i + 1].y - pts[i].y);
+  }
+  return total;
+}
+
+/**
+ * Sample a 2D polyline at an exact arc-length distance `dist` from the start.
+ * If `dist < 0`, extends straight backward behind the start tangent so followers can queue cleanly
+ * behind the leader before entering the route without overlapping!
+ */
+export function samplePolylineAtDistance2D(
   pts: RoutePoint[],
-  progress: number
+  dist: number
 ): { x: number; y: number; angle: number } {
   if (pts.length === 0) return { x: 0, y: 0, angle: 0 };
   if (pts.length === 1) return { x: pts[0].x, y: pts[0].y, angle: 0 };
 
-  const clamped = Math.max(0, Math.min(1, progress));
   const segLens: number[] = [];
   let total = 0;
-
   for (let i = 0; i < pts.length - 1; i++) {
     const l = Math.hypot(pts[i + 1].x - pts[i].x, pts[i + 1].y - pts[i].y);
     segLens.push(l);
@@ -44,13 +56,25 @@ export function samplePolyline2D(
 
   if (total < 1e-4) return { x: pts[0].x, y: pts[0].y, angle: 0 };
 
-  const targetDist = clamped * total;
-  let accum = 0;
+  // Extend straight behind start tangent if follower hasn't passed start point yet
+  if (dist < 0) {
+    const firstLen = segLens[0] || 1;
+    const dx = (pts[1].x - pts[0].x) / firstLen;
+    const dy = (pts[1].y - pts[0].y) / firstLen;
+    const angle = Math.atan2(dy, dx);
+    return {
+      x: pts[0].x + dx * dist,
+      y: pts[0].y + dy * dist,
+      angle,
+    };
+  }
 
+  const clampedDist = Math.min(total, dist);
+  let accum = 0;
   for (let i = 0; i < segLens.length; i++) {
     const l = segLens[i];
-    if (accum + l >= targetDist || i === segLens.length - 1) {
-      const localT = l > 1e-4 ? (targetDist - accum) / l : 0;
+    if (accum + l >= clampedDist || i === segLens.length - 1) {
+      const localT = l > 1e-4 ? (clampedDist - accum) / l : 0;
       const x = lerp(pts[i].x, pts[i + 1].x, localT);
       const y = lerp(pts[i].y, pts[i + 1].y, localT);
       const angle = Math.atan2(pts[i + 1].y - pts[i].y, pts[i + 1].x - pts[i].x);
@@ -60,7 +84,23 @@ export function samplePolyline2D(
   }
 
   const last = pts[pts.length - 1];
-  return { x: last.x, y: last.y, angle: 0 };
+  const prev = pts[pts.length - 2];
+  return {
+    x: last.x,
+    y: last.y,
+    angle: Math.atan2(last.y - prev.y, last.x - prev.x),
+  };
+}
+
+/**
+ * Sample a 2D polyline at normalized progress [0..1]
+ */
+export function samplePolyline2D(
+  pts: RoutePoint[],
+  progress: number
+): { x: number; y: number; angle: number } {
+  const total = getPolylineLength2D(pts);
+  return samplePolylineAtDistance2D(pts, Math.max(0, Math.min(1, progress)) * total);
 }
 
 /**
@@ -249,6 +289,7 @@ export function evaluateSandbox(
   let activeStepTitle = project.steps.length > 0 ? project.steps[0].title : 'ยังไม่มี Step งาน';
   let cursor = 0;
   let qcHaltedFlow = false;
+  let activeConvoy: SimConvoyVisual | undefined;
 
   for (let i = 0; i < project.steps.length; i++) {
     const step = project.steps[i];
@@ -443,6 +484,65 @@ export function evaluateSandbox(
           obj.angle = rState.angle;
           obj.holderType = 'amr';
           obj.holderLabel = `บนหลังรถ ${rMeta?.name ?? rState.id}`;
+        }
+      }
+    } else if (step.action === 'convoy-move' && step.routeId) {
+      // Single-lane platoon / convoy: ordered AMRs follow the exact same polyline with safe arc-length spacing!
+      const rawIds =
+        step.convoyRobotIds && step.convoyRobotIds.length > 0
+          ? step.convoyRobotIds
+          : [step.robotId, step.targetRobotId].filter((id): id is string => Boolean(id));
+      const convoyIds = Array.from(new Set(rawIds)).filter((id) => Boolean(robots[id]));
+      const route = project.routes.find((rt) => rt.id === step.routeId);
+      const spacing = Math.max(16, step.convoySpacing ?? 24);
+
+      if (convoyIds.length > 0 && route && route.points.length >= 2) {
+        const pts = step.reverseRoute ? [...route.points].reverse() : route.points;
+        const routeLen = getPolylineLength2D(pts);
+        const leadDist = smoothstep(p) * routeLen;
+
+        convoyIds.forEach((rid, idx) => {
+          const rState = robots[rid];
+          const rMeta = project.robots.find((rm) => rm.id === rid);
+          if (!rState) return;
+
+          // Leader travels 0 -> routeLen; follower k trails behind by k * spacing
+          // At arrival (p=1), leader stops at route end and followers park in single-file behind it!
+          const memberDist = leadDist - idx * spacing;
+          const sampled = samplePolylineAtDistance2D(pts, memberDist);
+
+          rState.x = sampled.x;
+          rState.y = sampled.y;
+          rState.angle = sampled.angle;
+          if (rMeta?.kind === 'amr-ur') {
+            rState.armEndX = sampled.x + Math.cos(sampled.angle) * 8;
+            rState.armEndY = sampled.y + Math.sin(sampled.angle) * 8;
+          }
+          if (isActive) {
+            rState.status =
+              idx === 0
+                ? `ขบวน #1 (คันนำ): ${step.title}`
+                : `ขบวน #${idx + 1} (ตามหลัง): ${step.title}`;
+          }
+
+          if (rState.carryingObjectId && objects[rState.carryingObjectId]) {
+            const obj = objects[rState.carryingObjectId];
+            obj.x = rState.x;
+            obj.y = rState.y;
+            obj.angle = rState.angle;
+            obj.holderType = 'amr';
+            obj.holderLabel = `บนหลังรถ ${rMeta?.name ?? rState.id}`;
+          }
+        });
+
+        if (isActive || isCompleted) {
+          activeConvoy = {
+            stepId: step.id,
+            robotIds: convoyIds,
+            color: route.color || '#38bdf8',
+            active: isActive,
+            spacing,
+          };
         }
       }
     } else if (step.action === 'pick-station' && step.robotId && step.stationId) {
@@ -663,5 +763,6 @@ export function evaluateSandbox(
     stationURs,
     objects,
     kitting: kittingState,
+    activeConvoy,
   };
 }
